@@ -1335,7 +1335,9 @@ export class DefaultPackageManager implements PackageManager {
 
 			if (parsed.type === "git") {
 				const installedPath = this.getGitInstallPath(parsed, resolvedScope);
-				if (!existsSync(installedPath)) {
+				const needsInstall =
+					!existsSync(installedPath) || !(await this.installedGitMatchesConfiguredRef(parsed, installedPath));
+				if (needsInstall) {
 					const installed = await installMissing();
 					if (!installed) continue;
 				} else if (resolvedScope === "temporary" && !parsed.pinned && !isOfflineModeEnabled()) {
@@ -1516,6 +1518,25 @@ export class DefaultPackageManager implements PackageManager {
 			return false;
 		}
 		return source.range ? satisfies(installedVersion, source.range) : true;
+	}
+
+	private async installedGitMatchesConfiguredRef(source: GitSource, installedPath: string): Promise<boolean> {
+		if (!source.ref) return true;
+		try {
+			const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+				cwd: installedPath,
+				timeoutMs: NETWORK_TIMEOUT_MS,
+			});
+			const configuredHead = await this.runCommandCapture(
+				"git",
+				["rev-parse", "--verify", "--end-of-options", `${source.ref}^{commit}`],
+				{ cwd: installedPath, timeoutMs: NETWORK_TIMEOUT_MS },
+			);
+			return localHead === configuredHead;
+		} catch {
+			// A newly configured ref may need fetching before it can be resolved locally.
+			return false;
+		}
 	}
 
 	private async npmHasAvailableUpdate(source: NpmSource, installedPath: string): Promise<boolean> {
